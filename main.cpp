@@ -236,25 +236,80 @@ private:
 	bool is_move_right = false;
 };
 
+//粒子类
+class Particle
+{
+public:
+	POINT position;
+	int lifetime; // 粒子寿命
+	COLORREF color;
+
+	Particle(POINT pos, COLORREF col, int life)
+		: position(pos), color(col), lifetime(life) {
+	}
+
+	void Update()
+	{
+		position.x += rand() % 5 - 2; // 随机移动
+		position.y += rand() % 5 - 2;
+		lifetime--;
+	}
+
+	void Draw() const
+	{
+		setfillcolor(color);
+		solidcircle(position.x, position.y, 2); // 绘制粒子
+	}
+
+	bool IsAlive() const { return lifetime > 0; }
+};
+
 //子弹类
 class Bullet
 {
 public:
 	POINT position = { 0,0 };
 	static IMAGE img_basketball;
-
-public:
-	Bullet() = default;
-	~Bullet() = default;
+	vector<Particle> particles; // 粒子列表
 
 	static void LoadBasketballImage()
 	{
 		loadimage(&img_basketball, _T("img/basketball.png"));
 	}
 
+	void UpdateEffect()
+	{
+		// 添加新粒子
+		for (int i = 0; i < 2; i++)//每2帧生成一个粒子
+		{
+			particles.emplace_back(position, RGB(186, 85, 211), 20); //寿命30帧
+		}
+
+		// 更新粒子
+		for (auto& particle : particles)
+		{
+			particle.Update();
+		}
+
+		// 移除粒子
+		particles.erase(remove_if(particles.begin(), particles.end(),
+			[](const Particle& p) { return !p.IsAlive(); }),
+			particles.end());
+	}
+
+	void DrawEffect() const
+	{
+		for (const auto& particle : particles)
+		{
+			particle.Draw();
+		}
+	}
+
 	void Draw() const
 	{
-		putimage_alpha(position.x - img_basketball.getwidth() / 2, position.y - img_basketball.getheight() / 2, &img_basketball);
+		putimage_alpha(position.x - img_basketball.getwidth() / 2,
+			position.y - img_basketball.getheight() / 2,
+			&img_basketball);
 	}
 };
 
@@ -493,7 +548,7 @@ protected:
 };
 
 //生成新的敌人
-int enemy_speed = 500;  //调整敌人生成速度的参数
+int enemy_speed = 400;  //调整敌人生成速度的参数
 void TryGenerateEnemy(vector<Enemy*>& enemy_list)
 {
 	static int counter = 0;
@@ -509,8 +564,8 @@ void TryGenerateEnemy(vector<Enemy*>& enemy_list)
 //更新子弹位置
 void UpdateBullets(vector<Bullet>& bullet_list, const Player& player)
 {
-	const double NORMAL_SPEED = 0.0036;  //法向速度
-	const double TANGENTIAL_SPEED = 0.0033;   //切向速度
+	const double NORMAL_SPEED = 0.0040;  //法向速度
+	const double TANGENTIAL_SPEED = 0.0037;   //切向速度
 	double radian_interval = 2 * pi / bullet_list.size();  //子弹之间的弧度间隔
 	POINT player_position = player.GetPosition();
 	double radius = 100 + 25 * sin(GetTickCount() * NORMAL_SPEED);
@@ -657,7 +712,7 @@ int main()
 				if (show_enemy_level_message)
 				{
 					DWORD current_time = GetTickCount();
-					if (current_time - message_start_time <= 1000) 
+					if (current_time - message_start_time <= 1000)  //停留一秒
 					{
 						setbkmode(TRANSPARENT);
 						settextcolor(RGB(255, 0, 0));
@@ -694,9 +749,11 @@ int main()
 			{
 				enemy->Draw(1000 / 144);
 			}
-			for (const Bullet& bullet : bullet_list)
+			for (Bullet& bullet : bullet_list)
 			{
-				bullet.Draw();
+				bullet.UpdateEffect();  // 更新粒子效果
+				bullet.DrawEffect();  // 绘制粒子效果
+				bullet.Draw(); 
 			}
 			DrawPlayerScore(score);
 		}
