@@ -23,6 +23,21 @@ IMAGE img_player_right[PLAYER_ANIM_NUM];
 
 bool running = true;
 bool is_game_started = false;  //标记游戏是否已经开始
+bool game_over = false;        //标记游戏是否结束
+bool show_player_level_message = false;  // 玩家等级提升消息
+bool show_enemy_level_message = false;   // 敌人速度提升消息
+DWORD player_message_start_time = 0;     // 玩家消息开始时间
+DWORD enemy_message_start_time = 0;      // 敌人消息开始时间
+
+//游戏状态枚举
+enum class GameState
+{
+	MENU,
+	PLAYING,
+	GAME_OVER
+};
+
+GameState current_state = GameState::MENU;  // 初始状态为菜单
 
 //借助系统绘图函数实现透明通道混叠
 inline void putimage_alpha(int x, int y, IMAGE* img)
@@ -51,7 +66,7 @@ void LoadAnimation()
 class Atlas  //动画所使用的图集
 {
 public:
-	Atlas(LPCTSTR path,int num)
+	Atlas(LPCTSTR path, int num)
 	{
 		TCHAR path_file[256];
 		for (size_t i = 0;i < num;i++)
@@ -125,6 +140,36 @@ public:
 	{
 		anim_left = new Animation(atlas_player_left, 45);
 		anim_right = new Animation(atlas_player_right, 45);
+	}
+
+	Player(const Player& other)
+	{
+		anim_left = new Animation(*other.anim_left);
+		anim_right = new Animation(*other.anim_right);
+		player_pos = other.player_pos;
+		is_move_up = other.is_move_up;
+		is_move_down = other.is_move_down;
+		is_move_left = other.is_move_left;
+		is_move_right = other.is_move_right;
+	}
+
+	Player& operator=(const Player& other)
+	{
+		if (this == &other)
+			return *this;
+
+		delete anim_left;
+		delete anim_right;
+
+		anim_left = new Animation(*other.anim_left);
+		anim_right = new Animation(*other.anim_right);
+		player_pos = other.player_pos;
+		is_move_up = other.is_move_up;
+		is_move_down = other.is_move_down;
+		is_move_left = other.is_move_left;
+		is_move_right = other.is_move_right;
+
+		return *this;
 	}
 
 	~Player()
@@ -322,7 +367,7 @@ public:
 	Enemy()
 	{
 		anim_left = new Animation(atlas_enemy_left, 45);
-	    anim_right= new Animation(atlas_enemy_right, 45);
+		anim_right = new Animation(atlas_enemy_right, 45);
 
 		//敌人生成边界
 		enum class SpawnEdge
@@ -419,7 +464,7 @@ public:
 	}
 
 	//检测敌人是否存活
-	bool CheckAlive()  
+	bool CheckAlive()
 	{
 		return alive;
 	}
@@ -441,7 +486,7 @@ private:
 class Button
 {
 public:
-	Button(RECT rect,LPCTSTR path_img_idle, LPCTSTR path_img_hovered, LPCTSTR path_img_pushed)
+	Button(RECT rect, LPCTSTR path_img_idle, LPCTSTR path_img_hovered, LPCTSTR path_img_pushed)
 	{
 		region = rect;
 		loadimage(&img_idle, path_img_idle);
@@ -496,7 +541,7 @@ protected:
 private:
 	enum class Status  //当前状态枚举变量
 	{
-		Idle=0,
+		Idle = 0,
 		Hovered,
 		Pushed
 	};
@@ -513,37 +558,6 @@ private:
 	bool CheckCursorHit(int x, int y)
 	{
 		return x >= region.left && x <= region.right && y >= region.top && y <= region.bottom;
-	}
-};
-
-//开始游戏按钮
-class StartGameButton :public Button
-{
-public:
-	StartGameButton(RECT rect, LPCTSTR path_img_idle, LPCTSTR path_img_hovered, LPCTSTR path_img_pushed)
-		:Button(rect, path_img_idle, path_img_hovered, path_img_pushed) {}
-	~StartGameButton() = default;
-
-protected:
-	void OnClick()
-	{
-		is_game_started = true;
-		mciSendString(_T("play bgm repeat from 0"), NULL, 0, NULL);  //播放背景音乐
-	}
-};
-
-//退出游戏按钮
-class QuitGameButton :public Button
-{
-public:
-	QuitGameButton(RECT rect, LPCTSTR path_img_idle, LPCTSTR path_img_hovered, LPCTSTR path_img_pushed)
-		:Button(rect, path_img_idle, path_img_hovered, path_img_pushed) {}
-	~QuitGameButton() = default;
-
-protected:
-	void OnClick()
-	{
-		running = false;
 	}
 };
 
@@ -581,16 +595,89 @@ void UpdateBullets(vector<Bullet>& bullet_list, const Player& player)
 void DrawPlayerScore(int score)
 {
 	static TCHAR text[64];
-	_stprintf_s(text, _T("当前玩家得分:%d"),score);
+	_stprintf_s(text, _T("当前玩家得分:%d"), score);
 
 	setbkmode(TRANSPARENT);
 	settextcolor(RGB(0, 0, 0));
 	outtextxy(10, 10, text);
 }
 
-bool show_enemy_level_message = false;
-DWORD message_start_time = 0;
+void ResetGameData(vector<Enemy*>& enemy_list, Player& player, vector<Bullet>& bullet_list, int& score)
+{
+	// 清空敌人列表并释放内存
+	for (Enemy* enemy : enemy_list)
+	{
+		delete enemy;
+	}
+	enemy_list.clear();
 
+	// 重置玩家位置
+	player = Player();
+
+	// 重置子弹数量
+	int bullet_num = 1;
+	bullet_list.resize(bullet_num);
+
+	// 重置分数和难度
+	score = 0;
+	enemy_speed = 400;
+
+	// 重置游戏状态
+	game_over = false;
+
+	// 重置消息状态
+	show_player_level_message = false;
+	show_enemy_level_message = false;
+}
+
+
+vector<Enemy*> enemy_list;
+Player player;
+vector<Bullet> bullet_list;
+int score = 0;
+
+// 开始游戏按钮
+class StartGameButton : public Button
+{
+public:
+	StartGameButton(RECT rect, LPCTSTR path_img_idle, LPCTSTR path_img_hovered, LPCTSTR path_img_pushed)
+		: Button(rect, path_img_idle, path_img_hovered, path_img_pushed) {
+	}
+	~StartGameButton() = default;
+
+protected:
+	void OnClick() override
+	{
+		if (current_state == GameState::GAME_OVER || current_state == GameState::MENU)
+		{
+			// 重置游戏数据
+			ResetGameData(enemy_list, player, bullet_list, score);
+
+			// 切换到游戏状态
+			current_state = GameState::PLAYING;
+			is_game_started = true;
+
+			// 播放背景音乐
+			mciSendString(_T("play bgm repeat from 0"), NULL, 0, NULL);
+		}
+	}
+};
+
+//退出游戏按钮
+class QuitGameButton :public Button
+{
+public:
+	QuitGameButton(RECT rect, LPCTSTR path_img_idle, LPCTSTR path_img_hovered, LPCTSTR path_img_pushed)
+		:Button(rect, path_img_idle, path_img_hovered, path_img_pushed) {
+	}
+	~QuitGameButton() = default;
+
+protected:
+	void OnClick()
+	{
+		running = false;
+	}
+};
 int main()
 {
 	atlas_player_left = new Atlas(_T("img/player_left_%d.png"), 6);
@@ -598,10 +685,6 @@ int main()
 	atlas_enemy_left = new Atlas(_T("img/enemy_left_%d.png"), 6);
 	atlas_enemy_right = new Atlas(_T("img/enemy_right_%d.png"), 6);
 
-	int score = 0;
-	Player player;
-	vector<Enemy*> enemys;
-	
 	IMAGE img_background;
 	loadimage(&img_background, _T("img/background.png"));
 	IMAGE img_menu;
@@ -614,9 +697,8 @@ int main()
 	initgraph(1280, 720);
 	BeginBatchDraw();
 	ExMessage msg;
-	vector<Enemy*>enemy_list;
 	int bullet_num = 1;
-	vector<Bullet>bullet_list(bullet_num);
+	bullet_list.resize(bullet_num);
 
 	RECT region_btn_start_game, region_btn_quit_game;
 	region_btn_start_game.left = (WINDOW_WIDTH - BUTTON_WIDTH) / 2;
@@ -627,29 +709,38 @@ int main()
 	region_btn_quit_game.right = (region_btn_quit_game.left + BUTTON_WIDTH);
 	region_btn_quit_game.top = 550;
 	region_btn_quit_game.bottom = region_btn_quit_game.top + BUTTON_HEIGHT;
-	
+
 	StartGameButton btn_start_game = StartGameButton(region_btn_start_game, _T("img/ui_start_idle.png"), _T("img/ui_start_hovered.png"), _T("img/ui_start_pushed.png"));
 	QuitGameButton btn_quit_game = QuitGameButton(region_btn_quit_game, _T("img/ui_quit_idle.png"), _T("img/ui_quit_hovered.png"), _T("img/ui_quit_pushed.png"));
 
 	while (running)
 	{
 		DWORD startTime = GetTickCount();
-		TryGenerateEnemy(enemys);
-		//获取输入
+
+		// 获取输入
 		while (peekmessage(&msg))
 		{
-			if (is_game_started)
-				player.ProcessEvent(msg);
-			else
+			// 处理窗口关闭事件
+			if (msg.message == WM_CLOSE)
 			{
-				btn_start_game.ProcessEvent(msg);
-				btn_quit_game.ProcessEvent(msg);
+				running = false;
+				break;
+			}
+
+			// 统一处理按钮事件，无论在什么状态下
+			btn_start_game.ProcessEvent(msg);
+			btn_quit_game.ProcessEvent(msg);
+
+			// 如果游戏正在进行，处理玩家控制
+			if (current_state == GameState::PLAYING)
+			{
+				player.ProcessEvent(msg);
 			}
 		}
 
-		if (is_game_started)
+		if (current_state == GameState::PLAYING)
 		{
-			//数据处理
+			// 数据处理
 			player.Move();
 			UpdateBullets(bullet_list, player);
 			TryGenerateEnemy(enemy_list);
@@ -657,92 +748,124 @@ int main()
 				enemy->Move(player);
 
 			//检测敌人与玩家的碰撞
+			bool collision_detected = false;
 			for (Enemy* enemy : enemy_list)
 			{
 				if (enemy->CheckPlayerCollision(player))
 				{
-					static TCHAR text[128];
-					_stprintf_s(text, _T("最终得分:%d !"), score);
-					MessageBox(GetHWnd(), text, _T("游戏结束"), MB_OK);
-					running = false;
+					collision_detected = true;
 					break;
 				}
 			}
 
-			//检测敌人被子弹攻击
-			for (Enemy* enemy : enemy_list)
+			if (collision_detected)
 			{
-				for (const Bullet& bullet : bullet_list)
-				{
-					if (enemy->CheckBulletCollision(bullet))
-					{
-						mciSendString(_T("play hit from 0"), NULL, 0, NULL);
-						enemy->Hurt();
-						score++;
-					}
-				}
-				int N1 = 15;
-				static int last_player_Lv = 0; // 记录上次的玩家等级
-				int current_player_Lv = score / N1; // 当前玩家等级
-				if (current_player_Lv > last_player_Lv)
-				{
-					bullet_num += 1;  // 每击杀 15 个敌人增加 1 个子弹
-					bullet_list.resize(bullet_num); // 重置子弹数量
-					last_player_Lv = current_player_Lv; // 更新玩家等级
+				// 暂停背景音乐
+				mciSendString(_T("stop bgm"), NULL, 0, NULL);
 
-					MessageBox(GetHWnd(), _T("你的等级已提升，篮球+1"), _T("等级提升"), MB_OK);
-				}
-				
-				int N2 = 25;
-				static int last_enemy_Lv = 0; // 记录上次的敌人等级
-				int current_enemy_Lv = score / N2; // 当前敌人等级
-				if (current_enemy_Lv > last_enemy_Lv)
-				{
-					enemy_speed -= 20;  // 每次减少固定值
-					if (enemy_speed < 60)
-					{
-						enemy_speed = 60;  // 防止 enemy_speed 小于等于 0
-					}
-					last_enemy_Lv = current_enemy_Lv; // 更新敌人等级
+				// 显示游戏结束对话框
+				TCHAR text[128];
+				_stprintf_s(text, _T("最终得分:%d !"), score);
+				MessageBox(GetHWnd(), text, _T("游戏结束"), MB_OK);
 
-					show_enemy_level_message = true;
-					message_start_time = GetTickCount();
-				}
-
-				if (show_enemy_level_message)
-				{
-					DWORD current_time = GetTickCount();
-					if (current_time - message_start_time <= 1000)  //停留一秒
-					{
-						setbkmode(TRANSPARENT);
-						settextcolor(RGB(255, 0, 0));
-						int text_x = (WINDOW_WIDTH - textwidth(_T("敌人等级增加！"))) / 2;
-						int text_y = 20; 
-						outtextxy(text_x, text_y, _T("敌人等级增加！"));
-					}
-					else
-					{
-						show_enemy_level_message = false;
-					}
-				}
+				// 切换到游戏结束状态
+				current_state = GameState::GAME_OVER;
+				game_over = true;
+				is_game_started = false;
 			}
-
-			//移除受击敌人
-			for (size_t i = 0;i < enemy_list.size();i++)
+			else
 			{
-				Enemy* enemy = enemy_list[i];
-				if (!enemy->CheckAlive())
+				//检测敌人被子弹攻击
+				bool enemy_hit = false;
+				for (Enemy* enemy : enemy_list)
 				{
-					swap(enemy_list[i], enemy_list.back());
-					enemy_list.pop_back();
-					delete enemy;  //避免内存泄露
+					for (const Bullet& bullet : bullet_list)
+					{
+						if (enemy->CheckBulletCollision(bullet))
+						{
+							mciSendString(_T("play hit from 0"), NULL, 0, NULL);
+							enemy->Hurt();
+							score++;
+							enemy_hit = true;
+							break;
+						}
+					}
+
+					if (enemy_hit)
+					{
+						enemy_hit = false;
+						continue;
+					}
+
+					int N1 = 15; // 每 15 分触发一次等级提升
+					static int last_player_Lv = 0; // 记录上次的玩家等级
+					int current_player_Lv = score / N1; // 当前玩家等级
+					if (current_player_Lv > last_player_Lv)
+					{
+						bullet_num += 1;  // 每击杀 15 个敌人增加 1 个子弹
+						bullet_list.resize(bullet_num); // 重置子弹数量
+						last_player_Lv = current_player_Lv; // 更新玩家等级
+
+						// 弹窗
+						MessageBox(GetHWnd(), _T("您的等级已提升，篮球+1！"), _T("等级提升"), MB_OK | MB_ICONINFORMATION);
+					}
+
+					int N2 = 25;
+					static int last_enemy_Lv = 0; // 记录上次的敌人等级
+					int current_enemy_Lv = score / N2; // 当前敌人等级
+					if (current_enemy_Lv > last_enemy_Lv)
+					{
+						enemy_speed -= 20;  // 每次减少固定值
+						if (enemy_speed < 60)
+						{
+							enemy_speed = 60;  // 防止 enemy_speed 小于等于 0
+						}
+						last_enemy_Lv = current_enemy_Lv; // 更新敌人等级
+
+						// 显示敌人速度提升消息
+						show_enemy_level_message = true;
+						enemy_message_start_time = GetTickCount();
+					}
+				}
+
+				//移除受击敌人
+				for (size_t i = 0;i < enemy_list.size();i++)
+				{
+					Enemy* enemy = enemy_list[i];
+					if (!enemy->CheckAlive())
+					{
+						swap(enemy_list[i], enemy_list.back());
+						enemy_list.pop_back();
+						delete enemy;  //避免内存泄露
+					}
 				}
 			}
 		}
-		
+
 		cleardevice();
-		if (is_game_started)
+
+		switch (current_state)
 		{
+		case GameState::MENU:
+		case GameState::GAME_OVER:
+			putimage(0, 0, &img_menu);
+			btn_start_game.Draw();
+			btn_quit_game.Draw();
+
+			// 如果是游戏结束状态，显示最终得分
+			if (current_state == GameState::GAME_OVER)
+			{
+				setbkmode(TRANSPARENT);
+				settextcolor(RGB(255, 0, 0));
+				TCHAR text[128];
+				_stprintf_s(text, _T("最终得分: %d"), score);
+				int text_x = (WINDOW_WIDTH - textwidth(text)) / 2;
+				int text_y = 350;
+				outtextxy(text_x, text_y, text);
+			}
+			break;
+
+		case GameState::PLAYING:
 			putimage(0, 0, &img_background);
 			player.Draw(1000 / 144);
 			for (Enemy* enemy : enemy_list)
@@ -753,17 +876,35 @@ int main()
 			{
 				bullet.UpdateEffect();  // 更新粒子效果
 				bullet.DrawEffect();  // 绘制粒子效果
-				bullet.Draw(); 
+				bullet.Draw();
 			}
+
+			// 绘制玩家得分
 			DrawPlayerScore(score);
+
+			
+
+			// 显示敌人速度提升消息
+			if (show_enemy_level_message)
+			{
+				DWORD current_time = GetTickCount();
+				if (current_time - enemy_message_start_time <= 1000)  // 停留一秒后消失
+				{
+					setbkmode(TRANSPARENT);
+					settextcolor(RGB(255, 0, 0));
+					settextstyle(20, 0, _T("黑体"));
+					int text_x = (WINDOW_WIDTH - textwidth(_T("注意：敌人生成速度加快！"))) / 2;
+					int text_y = 20;
+					outtextxy(text_x, text_y, _T("注意：敌人生成速度加快！"));
+				}
+				else
+				{
+					show_enemy_level_message = false;
+				}
+			}
+			break;
 		}
-		else
-		{
-			putimage(0, 0, &img_menu);
-			btn_start_game.Draw();
-			btn_quit_game.Draw();
-		}
-		
+
 		FlushBatchDraw();
 
 		DWORD endTime = GetTickCount();
@@ -773,6 +914,13 @@ int main()
 			Sleep(1000 / 144 - deltaTime);
 		}
 	}
+
+	// 释放资源
+	for (Enemy* enemy : enemy_list)
+	{
+		delete enemy;
+	}
+	enemy_list.clear();
 
 	delete atlas_player_left;
 	delete atlas_player_right;
